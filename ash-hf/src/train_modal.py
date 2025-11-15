@@ -22,8 +22,8 @@ image = (
         "datasets",
         "transformers",
     )
-    .add_local_dir("ash-hf/src", "/root/src")
-    .add_local_dir("ash-hf/data", "/root/data")
+    .add_local_dir("src", "/root/src")
+    .add_local_dir("data", "/root/data")
 )
 
 

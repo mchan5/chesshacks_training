@@ -1,5 +1,6 @@
 datasets
 transformers
+hf_xet
 torch
 tqdm
 python-chess
