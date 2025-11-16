@@ -27,9 +27,10 @@ image = (
 
 @app.function(
     image=image,
-    gpu="A10G",
-    timeout=86400,  # 24 hour timeout (increase as needed)
+    gpu="A100",  # Upgraded from A10G - 3x faster, better for training
+    timeout=86400,  # 24 hour timeout (maximum allowed)
     volumes={"/root/data": volume},  # Mount once, subdirectories for weights and selfplay
+    cpu=4,  # More CPU cores for faster data preprocessing
 )
 def continuous_train(
     num_iterations: int = 1000,
@@ -58,9 +59,9 @@ def continuous_train(
         games_per_iteration=games_per_iteration,
         mcts_simulations=mcts_simulations,
         train_epochs_per_iteration=2,
-        batch_size=64,
+        batch_size=128,  # Increased from 64 - A100 has more memory
         learning_rate=0.001,
-        checkpoint_every=5
+        checkpoint_every=10  # Save less frequently to speed up training
     )
 
     # Commit volume to persist all changes

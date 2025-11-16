@@ -91,6 +91,12 @@ def play_self_play_game(model, num_simulations=50, temperature=1.0, debug=False)
         if temperature > 0:
             visit_counts_temp = visit_counts ** (1.0 / temperature)
             policy = visit_counts_temp / visit_counts_temp.sum()
+
+            # Add Dirichlet noise for exploration (especially important early in training)
+            alpha = 0.3  # Dirichlet noise parameter
+            epsilon = 0.25  # Mix 25% noise with 75% policy
+            noise = np.random.dirichlet([alpha] * len(policy))
+            policy = (1 - epsilon) * policy + epsilon * noise
         else:
             # Greedy - pick best move
             policy = np.zeros_like(visit_counts)
@@ -192,7 +198,7 @@ def train_on_selfplay(model, optimizer, game_records, epochs=3, batch_size=64, u
 
             # Forward pass with automatic mixed precision
             if use_amp and scaler:
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     policy_logits, values = model(boards)
                     target_moves = torch.argmax(target_policies, dim=1)
                     policy_loss = criterion_policy(policy_logits, target_moves)
