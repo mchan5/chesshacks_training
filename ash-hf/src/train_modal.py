@@ -3,12 +3,17 @@ Modal deployment script for chess AI training with MCTS.
 Run with: modal run train_modal.py
 """
 import modal
+import os
 
 # Create Modal app
 app = modal.App("chess-mcts-training")
 
 # Create a volume for persistent storage of weights and data
 volume = modal.Volume.from_name("chess-weights", create_if_missing=True)
+
+# Determine paths based on script location
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(script_dir)
 
 # Define the image with all dependencies
 # Copy local files into the image
@@ -21,9 +26,10 @@ image = (
         "python-chess",
         "datasets",
         "transformers",
+        "fastapi[standard]",  # Required for web endpoint on newer Modal
     )
-    .add_local_dir("src", "/root/src")
-    .add_local_dir("data", "/root/data")
+    .add_local_dir(script_dir, "/root/src")  # Copy src directory
+    .add_local_dir(os.path.join(parent_dir, "data"), "/root/data")  # Copy data directory
 )
 
 
@@ -145,7 +151,7 @@ def download_weights():
 
     files = os.listdir(weights_dir)
     print(f"Found {len(files)} files in weights directory:")
-    for f in files:
+    for f in sorted(files):
         print(f"  - {f}")
 
     # Return file contents for download
@@ -159,15 +165,79 @@ def download_weights():
     return weights
 
 
+@app.function(
+    image=image,
+    volumes={"/root/weights": volume},
+)
+def list_checkpoints():
+    """List all available checkpoints on Modal volume"""
+    import os
+
+    weights_dir = "/root/weights"
+
+    if not os.path.exists(weights_dir):
+        return []
+
+    files = [f for f in os.listdir(weights_dir) if f.endswith('.pt')]
+
+    checkpoints = []
+    for f in sorted(files):
+        path = os.path.join(weights_dir, f)
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+
+        # Try to load metadata
+        try:
+            import torch
+            checkpoint = torch.load(path, map_location='cpu')
+            iteration = checkpoint.get('iteration', checkpoint.get('epoch', '?'))
+            loss = checkpoint.get('train_loss', checkpoint.get('val_loss', '?'))
+            checkpoints.append({
+                'filename': f,
+                'size_mb': round(size_mb, 2),
+                'iteration': iteration,
+                'loss': loss
+            })
+        except:
+            checkpoints.append({
+                'filename': f,
+                'size_mb': round(size_mb, 2),
+                'iteration': '?',
+                'loss': '?'
+            })
+
+    return checkpoints
+
+
+@app.function(
+    image=image,
+    volumes={"/root/weights": volume},
+)
+def download_specific_checkpoint(checkpoint_name: str):
+    """Download a specific checkpoint by name"""
+    import os
+
+    weights_dir = "/root/weights"
+    path = os.path.join(weights_dir, checkpoint_name)
+
+    if not os.path.exists(path):
+        print(f"Checkpoint {checkpoint_name} not found!")
+        return None
+
+    with open(path, 'rb') as f:
+        return f.read()
+
+
 @app.local_entrypoint()
-def main(mode: str = "train"):
+def main(mode: str = "train", checkpoint: str = ""):
     """
     Main entry point for Modal deployment.
 
     Usage:
-        modal run train_modal.py                    # Train the model
-        modal run train_modal.py --mode predict     # Test prediction
-        modal run train_modal.py --mode download    # Download weights
+        modal run train_modal.py                              # Train the model
+        modal run train_modal.py --mode predict               # Test prediction
+        modal run train_modal.py --mode download              # Download all weights
+        modal run train_modal.py --mode list                  # List checkpoints
+        modal run train_modal.py --mode download --checkpoint iteration_50.pt  # Download specific
     """
     if mode == "train":
         print("Launching training job on Modal...")
@@ -179,27 +249,57 @@ def main(mode: str = "train"):
         result = predict_move.remote(starting_fen, num_simulations=100)
         print(f"\nPredicted move: {result}")
 
+    elif mode == "list":
+        print("Fetching checkpoint list from Modal...")
+        checkpoints = list_checkpoints.remote()
+
+        if checkpoints:
+            print(f"\nFound {len(checkpoints)} checkpoints:\n")
+            print(f"{'Filename':<30} {'Size (MB)':<12} {'Iteration':<12} {'Loss':<10}")
+            print("-" * 70)
+            for cp in checkpoints:
+                print(f"{cp['filename']:<30} {cp['size_mb']:<12} {str(cp['iteration']):<12} {str(cp['loss']):<10}")
+        else:
+            print("No checkpoints found.")
+
     elif mode == "download":
-        print("Downloading weights from Modal...")
-        weights = download_weights.remote()
+        if checkpoint:
+            # Download specific checkpoint
+            print(f"Downloading checkpoint: {checkpoint}")
+            content = download_specific_checkpoint.remote(checkpoint)
 
-        if weights:
-            import os
-            os.makedirs("ash-hf/weights", exist_ok=True)
+            if content:
+                import os
+                os.makedirs("weights", exist_ok=True)
+                local_path = os.path.join("weights", checkpoint)
 
-            for filename, content in weights.items():
-                local_path = os.path.join("ash-hf/weights", filename)
                 with open(local_path, 'wb') as f:
                     f.write(content)
-                print(f"Downloaded: {local_path}")
-
-            print(f"\nSuccessfully downloaded {len(weights)} weight files!")
+                print(f"✓ Downloaded: {local_path}")
+            else:
+                print("Checkpoint not found!")
         else:
-            print("No weights found to download.")
+            # Download all weights
+            print("Downloading all weights from Modal...")
+            weights = download_weights.remote()
+
+            if weights:
+                import os
+                os.makedirs("weights", exist_ok=True)
+
+                for filename, content in weights.items():
+                    local_path = os.path.join("weights", filename)
+                    with open(local_path, 'wb') as f:
+                        f.write(content)
+                    print(f"Downloaded: {local_path}")
+
+                print(f"\n✓ Successfully downloaded {len(weights)} weight files!")
+            else:
+                print("No weights found to download.")
 
     else:
         print(f"Unknown mode: {mode}")
-        print("Valid modes: train, predict, download")
+        print("Valid modes: train, predict, download, list")
 
 
 # Serve as web endpoint (optional)
@@ -208,7 +308,7 @@ def main(mode: str = "train"):
     gpu="T4",
     volumes={"/root/weights": volume},
 )
-@modal.web_endpoint(method="POST")
+@modal.fastapi_endpoint(method="POST")
 def predict_api(request: dict):
     """
     Web API endpoint for move prediction.

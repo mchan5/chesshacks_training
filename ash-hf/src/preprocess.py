@@ -2,6 +2,7 @@ from datasets import load_dataset, Dataset
 import json
 import os
 from tqdm import tqdm
+import argparse
 
 
 def _normalize_moves(value):
@@ -35,6 +36,14 @@ def _normalize_moves(value):
     # Fallback: coerce to string
     return [str(value)]
 
+parser = argparse.ArgumentParser(description="Stream and preprocess chess games and puzzles")
+parser.add_argument("--games", type=int, default=20000, help="Number of games to process (default: 20000)")
+parser.add_argument("--puzzles", type=int, default=10000, help="Number of puzzles to process (default: 10000)")
+args = parser.parse_args()
+
+games_target = max(0, args.games)
+puzzles_target = max(0, args.puzzles)
+
 os.makedirs("../data", exist_ok=True)
 
 # ---- Load chess games dataset ----
@@ -44,11 +53,11 @@ print("This will download data as needed (much faster startup!)")
 # Use streaming to avoid downloading entire dataset
 games_ds = load_dataset("angeluriot/chess_games", split="train", streaming=True)
 
-# Take first 5000 games using streaming
+# Take first N games using streaming
 processed_games = []
-print("Processing 5000 games...")
-for i, game in enumerate(tqdm(games_ds, total=5000, desc="Games")):
-    if i >= 5000:
+print(f"Processing {games_target} games...")
+for i, game in enumerate(tqdm(games_ds, total=games_target, desc="Games")):
+    if i >= games_target:
         break
     try:
         raw_moves = game.get("moves_uci")
@@ -73,11 +82,11 @@ print("Saved games.json with", len(processed_games), "games")
 print("\nLoading puzzles dataset using streaming mode...")
 puzzles_ds = load_dataset("Lichess/chess-puzzles", split="train", streaming=True)
 
-# Take first 2000 puzzles using streaming
+# Take first M puzzles using streaming
 processed_puzzles = []
-print("Processing 2000 puzzles...")
-for i, p in enumerate(tqdm(puzzles_ds, total=2000, desc="Puzzles")):
-    if i >= 2000:
+print(f"Processing {puzzles_target} puzzles...")
+for i, p in enumerate(tqdm(puzzles_ds, total=puzzles_target, desc="Puzzles")):
+    if i >= puzzles_target:
         break
     try:
         fen = p.get("FEN")

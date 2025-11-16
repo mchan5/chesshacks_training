@@ -1,5 +1,4 @@
 # Chess AI Training on Modal
-
 Deploy and train your chess AI with MCTS on cloud GPUs using Modal.
 
 ## Setup

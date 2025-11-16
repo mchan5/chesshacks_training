@@ -6,3 +6,4 @@ tqdm
 python-chess
 modal
 numpy
+fastapi
