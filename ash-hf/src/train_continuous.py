@@ -15,6 +15,9 @@ from tqdm import tqdm
 import time
 from datetime import datetime
 
+# Enable TensorFloat32 for better performance on Ampere GPUs (A10G, A100)
+torch.set_float32_matmul_precision('high')
+
 from train import ChessNet, MCTS, encode_board, move_to_index, device
 
 # Paths
@@ -53,7 +56,7 @@ class SelfPlayDataset(Dataset):
         )
 
 
-def play_self_play_game(model, num_simulations=50, temperature=1.0):
+def play_self_play_game(model, num_simulations=50, temperature=1.0, debug=False):
     """
     Play one self-play game using MCTS.
 
@@ -61,10 +64,14 @@ def play_self_play_game(model, num_simulations=50, temperature=1.0):
         model: Neural network
         num_simulations: MCTS simulations per move
         temperature: Exploration temperature (higher = more random)
+        debug: Print timing information
 
     Returns:
         Game record with positions, policies, and outcome
     """
+    import time as time_module
+    game_start = time_module.time()
+
     board = chess.Board()
     mcts = MCTS(model, num_simulations=num_simulations)
 
@@ -73,6 +80,10 @@ def play_self_play_game(model, num_simulations=50, temperature=1.0):
     max_moves = 200  # Prevent infinite games
 
     while not board.is_game_over() and move_count < max_moves:
+        move_start = time_module.time()
+
+        if debug and move_count == 0:
+            print(f"  Starting first move (this may be slow due to CUDA warmup)...")
         # Get MCTS policy
         visit_counts = mcts.search(board)
 
@@ -145,17 +156,27 @@ def play_self_play_game(model, num_simulations=50, temperature=1.0):
             value
         ))
 
+    if debug:
+        game_time = time_module.time() - game_start
+        print(f"  Game completed in {game_time:.1f}s ({move_count} moves, {game_time/max(move_count,1):.2f}s/move)")
+        print(f"  Result: {result} (outcome value: {outcome})")
+        if board.outcome():
+            print(f"  Termination: {board.outcome().termination}")
+
     return game_record
 
 
-def train_on_selfplay(model, optimizer, game_records, epochs=3, batch_size=64):
-    """Train model on self-play data"""
+def train_on_selfplay(model, optimizer, game_records, epochs=3, batch_size=64, use_amp=True):
+    """Train model on self-play data with optional mixed precision"""
     dataset = SelfPlayDataset(game_records)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     model.train()
     criterion_policy = nn.CrossEntropyLoss()
     criterion_value = nn.MSELoss()
+
+    # Mixed precision training
+    scaler = torch.cuda.amp.GradScaler() if use_amp else None
 
     total_loss = 0
 
@@ -169,21 +190,28 @@ def train_on_selfplay(model, optimizer, game_records, epochs=3, batch_size=64):
 
             optimizer.zero_grad()
 
-            # Forward pass
-            policy_logits, values = model(boards)
+            # Forward pass with automatic mixed precision
+            if use_amp and scaler:
+                with torch.cuda.amp.autocast():
+                    policy_logits, values = model(boards)
+                    target_moves = torch.argmax(target_policies, dim=1)
+                    policy_loss = criterion_policy(policy_logits, target_moves)
+                    value_loss = criterion_value(values.squeeze(), target_values)
+                    loss = policy_loss + value_loss
 
-            # Convert target policy to class labels for CrossEntropyLoss
-            target_moves = torch.argmax(target_policies, dim=1)
-
-            # Calculate losses
-            policy_loss = criterion_policy(policy_logits, target_moves)
-            value_loss = criterion_value(values.squeeze(), target_values)
-
-            loss = policy_loss + value_loss
-
-            # Backward pass
-            loss.backward()
-            optimizer.step()
+                # Backward pass with gradient scaling
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                # Regular precision
+                policy_logits, values = model(boards)
+                target_moves = torch.argmax(target_policies, dim=1)
+                policy_loss = criterion_policy(policy_logits, target_moves)
+                value_loss = criterion_value(values.squeeze(), target_values)
+                loss = policy_loss + value_loss
+                loss.backward()
+                optimizer.step()
 
             epoch_loss += loss.item()
 
@@ -227,22 +255,49 @@ def continuous_training(
     # Initialize or load model
     model = ChessNet(
         input_channels=18,
-        num_filters=128,
-        num_residual_blocks=5
+        num_filters=64,  # Reduced from 128
+        num_residual_blocks=3  # Reduced from 5
     ).to(device)
+
+    # Compile model for faster inference (PyTorch 2.0+)
+    try:
+        model = torch.compile(model, mode="reduce-overhead")
+        print("Model compiled with torch.compile for faster inference")
+    except:
+        print("torch.compile not available, using uncompiled model")
 
     # Try to load existing model
     best_model_path = os.path.join(WEIGHTS_DIR, "best_model.pt")
     start_iteration = 0
 
     if os.path.exists(best_model_path):
-        print(f"\nLoading existing model from {best_model_path}")
-        checkpoint = torch.load(best_model_path, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        start_iteration = checkpoint.get('iteration', 0)
-        print(f"Resuming from iteration {start_iteration}")
+        print(f"\nFound existing checkpoint at {best_model_path}")
+        try:
+            checkpoint = torch.load(best_model_path, map_location=device)
+            state_dict = checkpoint['model_state_dict']
+
+            # Remove _orig_mod. prefix if present (from torch.compile)
+            cleaned_state_dict = {}
+            for k, v in state_dict.items():
+                if k.startswith('_orig_mod.'):
+                    cleaned_state_dict[k[len('_orig_mod.'):]] = v
+                else:
+                    cleaned_state_dict[k] = v
+
+            # Try loading - this will fail if architecture changed
+            model.load_state_dict(cleaned_state_dict, strict=True)
+            start_iteration = checkpoint.get('iteration', 0)
+            print(f"Successfully loaded checkpoint, resuming from iteration {start_iteration}")
+
+        except (RuntimeError, KeyError) as e:
+            print(f"\n⚠️  Checkpoint architecture mismatch (old model had different size)")
+            print(f"⚠️  This is expected if you changed network parameters")
+            print(f"⚠️  Starting fresh with new optimized architecture")
+            print(f"⚠️  Old checkpoint will be overwritten\n")
+            start_iteration = 0
     else:
-        print("\nStarting from scratch")
+        print("\nNo existing checkpoint found, starting from scratch")
+        start_iteration = 0
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 
@@ -263,7 +318,8 @@ def continuous_training(
             game_record = play_self_play_game(
                 model,
                 num_simulations=mcts_simulations,
-                temperature=1.0 if iteration < 10 else 0.5  # Reduce exploration over time
+                temperature=1.0 if iteration < 10 else 0.5,  # Reduce exploration over time
+                debug=(game_num == 0)  # Debug first game of each iteration
             )
             game_records.append(game_record)
 

@@ -34,7 +34,7 @@ class ChessNet(nn.Module):
     - Policy: probability distribution over legal moves
     - Value: position evaluation (-1 to 1)
     """
-    def __init__(self, input_channels=119, num_filters=256, num_residual_blocks=10):
+    def __init__(self, input_channels=18, num_filters=128, num_residual_blocks=5):
         super(ChessNet, self).__init__()
 
         # Initial convolutional block
@@ -105,12 +105,12 @@ class ResidualBlock(nn.Module):
 def encode_board(board):
     """
     Encode chess board to neural network input tensor.
-    Uses 119 channels (14 piece types * 8 history + 7 meta features).
-    For simplicity, we use 18 channels: 12 for pieces + 6 for meta info.
+    Uses 18 channels: 12 for pieces + 6 for meta info.
+    Optimized for speed with minimal allocations.
     """
     planes = np.zeros((18, 8, 8), dtype=np.float32)
 
-    # Piece planes (6 piece types * 2 colors)
+    # Piece planes (6 piece types * 2 colors) - optimized loop
     piece_map = {
         chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2,
         chess.ROOK: 3, chess.QUEEN: 4, chess.KING: 5
@@ -120,27 +120,25 @@ def encode_board(board):
         piece = board.piece_at(square)
         if piece:
             rank, file = divmod(square, 8)
-            channel = piece_map[piece.piece_type]
-            if not piece.color:  # Black pieces
-                channel += 6
+            channel = piece_map[piece.piece_type] + (0 if piece.color else 6)
             planes[channel, rank, file] = 1.0
 
-    # Meta information planes
-    # Turn (12)
+    # Meta information planes - vectorized where possible
     if board.turn == chess.WHITE:
-        planes[12, :, :] = 1.0
+        planes[12] = 1.0  # Faster than [:, :] assignment
 
-    # Castling rights (13-16)
-    if board.has_kingside_castling_rights(chess.WHITE):
-        planes[13, :, :] = 1.0
-    if board.has_queenside_castling_rights(chess.WHITE):
-        planes[14, :, :] = 1.0
-    if board.has_kingside_castling_rights(chess.BLACK):
-        planes[15, :, :] = 1.0
-    if board.has_queenside_castling_rights(chess.BLACK):
-        planes[16, :, :] = 1.0
+    # Castling rights - batch check
+    castling = [
+        board.has_kingside_castling_rights(chess.WHITE),
+        board.has_queenside_castling_rights(chess.WHITE),
+        board.has_kingside_castling_rights(chess.BLACK),
+        board.has_queenside_castling_rights(chess.BLACK)
+    ]
+    for i, has_right in enumerate(castling):
+        if has_right:
+            planes[13 + i] = 1.0
 
-    # En passant (17)
+    # En passant
     if board.ep_square:
         rank, file = divmod(board.ep_square, 8)
         planes[17, rank, file] = 1.0
@@ -246,47 +244,65 @@ class MCTSNode:
 
 
 class MCTS:
-    """Monte Carlo Tree Search"""
-    def __init__(self, model, num_simulations=100):
+    """Monte Carlo Tree Search with batched evaluation"""
+    def __init__(self, model, num_simulations=100, batch_size=8):
         self.model = model
         self.num_simulations = num_simulations
+        self.batch_size = batch_size
 
     @torch.no_grad()
     def search(self, board):
-        """Run MCTS and return move probabilities"""
+        """Run MCTS with batched neural network evaluation"""
         root = MCTSNode(board)
 
-        # Run simulations
-        for _ in range(self.num_simulations):
-            node = root
+        # Process simulations in batches
+        for batch_start in range(0, self.num_simulations, self.batch_size):
+            batch_end = min(batch_start + self.batch_size, self.num_simulations)
+            nodes_to_eval = []
+            terminal_nodes = []
 
-            # Selection - traverse tree to leaf
-            while node.is_expanded and node.children:
+            # Collect batch of nodes to evaluate
+            for _ in range(batch_end - batch_start):
+                node = root
+
+                # Selection - traverse to leaf
+                while node.is_expanded and node.children:
+                    if node.board.is_game_over():
+                        break
+                    node = node.select_child()
+
+                # Separate terminal vs non-terminal nodes
                 if node.board.is_game_over():
-                    break
-                node = node.select_child()
-
-            # Evaluation
-            if node.board.is_game_over():
-                # Terminal node
-                result = node.board.result()
-                if result == "1-0":
-                    value = 1.0 if node.board.turn == chess.BLACK else -1.0
-                elif result == "0-1":
-                    value = 1.0 if node.board.turn == chess.WHITE else -1.0
+                    result = node.board.result()
+                    if result == "1-0":
+                        value = 1.0 if node.board.turn == chess.BLACK else -1.0
+                    elif result == "0-1":
+                        value = 1.0 if node.board.turn == chess.WHITE else -1.0
+                    else:
+                        value = 0.0
+                    terminal_nodes.append((node, value))
                 else:
-                    value = 0.0
-            else:
-                # Expand and evaluate with neural network
-                board_tensor = torch.FloatTensor(encode_board(node.board)).unsqueeze(0).to(device)
-                policy_logits, value = self.model(board_tensor)
-                policy_probs = torch.softmax(policy_logits, dim=1).cpu().numpy()[0]
-                value = value.item()
+                    nodes_to_eval.append(node)
 
-                node.expand(policy_probs)
+            # Batch evaluate non-terminal nodes
+            if nodes_to_eval:
+                # Encode all boards at once
+                boards = np.array([encode_board(n.board) for n in nodes_to_eval])
+                boards_tensor = torch.FloatTensor(boards).to(device)
 
-            # Backpropagation
-            node.backpropagate(value)
+                # Single batched forward pass
+                policy_logits_batch, values_batch = self.model(boards_tensor)
+                policy_probs_batch = torch.softmax(policy_logits_batch, dim=1).cpu().numpy()
+                values_batch = values_batch.cpu().numpy().flatten()
+
+                # Expand and backpropagate
+                for i, node in enumerate(nodes_to_eval):
+                    node.expand(policy_probs_batch[i])
+                    node.backpropagate(float(values_batch[i]))
+
+            # Backpropagate terminal nodes
+            for node, value in terminal_nodes:
+                node.backpropagate(value)
 
         # Return visit count distribution as policy
         visit_counts = np.zeros(4096)
