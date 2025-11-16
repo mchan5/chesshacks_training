@@ -84,23 +84,37 @@ def play_self_play_game(model, num_simulations=50, temperature=1.0, debug=False)
 
         if debug and move_count == 0:
             print(f"  Starting first move (this may be slow due to CUDA warmup)...")
+
         # Get MCTS policy
         visit_counts = mcts.search(board)
 
-        # Apply temperature
-        if temperature > 0:
-            visit_counts_temp = visit_counts ** (1.0 / temperature)
-            policy = visit_counts_temp / visit_counts_temp.sum()
+        # Get legal moves and their indices
+        legal_moves = list(board.legal_moves)
+        legal_indices = [move_to_index(move) for move in legal_moves]
 
-            # Add Dirichlet noise for exploration (especially important early in training)
-            alpha = 0.3  # Dirichlet noise parameter
-            epsilon = 0.25  # Mix 25% noise with 75% policy
-            noise = np.random.dirichlet([alpha] * len(policy))
-            policy = (1 - epsilon) * policy + epsilon * noise
+        # Extract visit counts for legal moves only
+        legal_visit_counts = np.array([visit_counts[idx] for idx in legal_indices])
+
+        # Apply temperature to legal moves only
+        if temperature > 0:
+            # Add small epsilon to avoid division by zero
+            legal_visit_counts_temp = (legal_visit_counts + 1e-8) ** (1.0 / temperature)
+            move_probs = legal_visit_counts_temp / legal_visit_counts_temp.sum()
+
+            # Add Dirichlet noise to legal moves only (AlphaZero style)
+            alpha = 0.3
+            epsilon = 0.25
+            noise = np.random.dirichlet([alpha] * len(legal_moves))
+            move_probs = (1 - epsilon) * move_probs + epsilon * noise
         else:
-            # Greedy - pick best move
-            policy = np.zeros_like(visit_counts)
-            policy[np.argmax(visit_counts)] = 1.0
+            # Greedy - pick best legal move
+            move_probs = np.zeros(len(legal_moves))
+            move_probs[np.argmax(legal_visit_counts)] = 1.0
+
+        # Create full policy array for training (map back to 4096)
+        policy = np.zeros(4096)
+        for i, idx in enumerate(legal_indices):
+            policy[idx] = move_probs[i]
 
         # Store position and policy
         encoded_board = encode_board(board)
@@ -110,26 +124,8 @@ def play_self_play_game(model, num_simulations=50, temperature=1.0, debug=False)
             'turn': board.turn
         })
 
-        # Sample move from policy
-        legal_moves = list(board.legal_moves)
-        move_probs = []
-        moves = []
-
-        for move in legal_moves:
-            idx = move_to_index(move)
-            if idx < len(policy) and policy[idx] > 0:
-                move_probs.append(policy[idx])
-                moves.append(move)
-
-        if not moves:
-            break
-
-        # Normalize probabilities
-        move_probs = np.array(move_probs)
-        move_probs = move_probs / move_probs.sum()
-
-        # Sample move
-        chosen_move = np.random.choice(moves, p=move_probs)
+        # Sample move from the computed move probabilities
+        chosen_move = np.random.choice(legal_moves, p=move_probs)
         board.push(chosen_move)
         move_count += 1
 
