@@ -242,7 +242,7 @@ def supervised_pretrain(
         'stage': 'supervised_pretrain'
     }, pretrain_path)
 
-    print(f"\n✓ Pre-trained model saved to {pretrain_path}")
+    print(f"\n[OK] Pre-trained model saved to {pretrain_path}")
     print("="*60 + "\n")
 
 
@@ -250,7 +250,9 @@ def hybrid_training(
     supervised_epochs=5,
     selfplay_iterations=500,
     games_per_iteration=20,
-    mcts_simulations=30
+    mcts_simulations=30,
+    modal_volume=None,
+    checkpoint_every=10
 ):
     """
     Full hybrid training pipeline:
@@ -274,9 +276,9 @@ def hybrid_training(
     # Try to compile model
     try:
         model = torch.compile(model, mode="reduce-overhead")
-        print("✓ Model compiled with torch.compile")
+        print("[OK] Model compiled with torch.compile")
     except:
-        print("⚠ torch.compile not available")
+        print("[WARNING] torch.compile not available")
 
     # Stage 1: Supervised pre-training
     games_file = os.path.join(DATA_DIR, "games.json")
@@ -290,7 +292,7 @@ def hybrid_training(
             epochs=supervised_epochs
         )
     else:
-        print("\n⚠ No supervised data found, skipping pre-training")
+        print("\n[WARNING] No supervised data found, skipping pre-training")
         print("To use supervised pre-training:")
         print("  python preprocess.py --games 10000 --puzzles 5000")
         print("\nProceeding directly to self-play...\n")
@@ -315,7 +317,8 @@ def hybrid_training(
         train_epochs_per_iteration=2,
         batch_size=64,
         learning_rate=0.001,
-        checkpoint_every=10
+        checkpoint_every=checkpoint_every,
+        modal_volume=modal_volume
     )
 
 

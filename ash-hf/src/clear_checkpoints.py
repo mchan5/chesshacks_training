@@ -30,7 +30,7 @@ def clear_all_checkpoints():
             for f in checkpoint_files:
                 path = os.path.join(weights_dir, f)
                 os.remove(path)
-                print(f"✓ Deleted {f}")
+                print(f"Deleted {f}")
 
             print("\nAll checkpoints cleared! Ready for fresh training.")
         else:
@@ -52,6 +52,6 @@ def main():
     if response.lower() == "yes":
         print("\nClearing checkpoints...")
         clear_all_checkpoints.remote()
-        print("\n✓ Done! You can now start training from scratch.")
+        print("\nDone! You can now start training from scratch.")
     else:
         print("Cancelled.")

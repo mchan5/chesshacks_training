@@ -7,7 +7,7 @@ import modal
 app = modal.App("chess-progress-check")
 volume = modal.Volume.from_name("chess-weights", create_if_missing=False)
 
-@app.function(volumes={"/root/data": volume})
+@app.function(volumes={"/root/weights": volume})
 def check_storage():
     """Check what's stored in the Modal volume"""
     import os
@@ -16,19 +16,18 @@ def check_storage():
     print("MODAL VOLUME CONTENTS")
     print("="*60)
 
-    base_dir = "/root/data"
+    weights_dir = "/root/weights"
 
-    if not os.path.exists(base_dir):
-        print("❌ No data directory found - training hasn't started yet")
+    if not os.path.exists(weights_dir):
+        print("No weights directory found - training hasn't started yet")
         return
 
     total_size = 0
     file_count = 0
 
     # Check weights directory
-    weights_dir = os.path.join(base_dir, "weights")
     if os.path.exists(weights_dir):
-        print("\n📦 CHECKPOINTS (weights/):")
+        print("\n[CHECKPOINTS] (weights/):")
         weights = os.listdir(weights_dir)
         checkpoints = [f for f in weights if f.endswith('.pt')]
 
@@ -46,18 +45,18 @@ def check_storage():
                     import torch
                     checkpoint = torch.load(path, map_location='cpu')
                     iteration = checkpoint.get('iteration', '?')
-                    print(f"  ✓ {cp:30s} {size_mb:6.1f} MB (iteration {iteration})")
+                    print(f"  [OK] {cp:30s} {size_mb:6.1f} MB (iteration {iteration})")
                 except:
-                    print(f"  ✓ {cp:30s} {size_mb:6.1f} MB")
+                    print(f"  [OK] {cp:30s} {size_mb:6.1f} MB")
         else:
             print("  (No checkpoints found)")
     else:
-        print("\n📦 CHECKPOINTS: None yet")
+        print("\n[CHECKPOINTS] None yet")
 
-    # Check selfplay directory
-    selfplay_dir = os.path.join(base_dir, "selfplay")
+    # Check selfplay directory (now in same location as weights)
+    selfplay_dir = "/root/weights/selfplay"
     if os.path.exists(selfplay_dir):
-        print("\n🎮 SELF-PLAY GAMES (selfplay/):")
+        print("\n[SELF-PLAY GAMES] (selfplay/):")
         games = os.listdir(selfplay_dir)
         if games:
             game_count = len(games)
@@ -72,7 +71,7 @@ def check_storage():
         else:
             print("  (No game files)")
     else:
-        print("\n🎮 SELF-PLAY GAMES: None")
+        print("\n[SELF-PLAY GAMES] None")
 
     # Summary
     print("\n" + "="*60)
@@ -90,7 +89,7 @@ def check_storage():
             import torch
             checkpoint = torch.load(os.path.join(weights_dir, latest_checkpoint), map_location='cpu')
             iteration = checkpoint.get('iteration', 0)
-            print(f"\n📊 Latest iteration: {iteration}")
+            print(f"\n[STATS] Latest iteration: {iteration}")
 
             # Estimate based on common targets
             if iteration < 100:

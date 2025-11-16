@@ -60,14 +60,17 @@ def hybrid_train(
     print(f"Stage 2: Self-play ({selfplay_iterations} iterations)")
     print("=" * 60)
 
+    # Pass the volume object so training can commit periodically
     hybrid_training(
         supervised_epochs=supervised_epochs,
         selfplay_iterations=selfplay_iterations,
         games_per_iteration=games_per_iteration,
-        mcts_simulations=mcts_simulations
+        mcts_simulations=mcts_simulations,
+        modal_volume=volume,
+        checkpoint_every=3  # Save every 3 iterations (~15-30 minutes)
     )
 
-    # Commit volume to persist all changes
+    # Final commit to persist all changes
     volume.commit()
 
     print("\n" + "=" * 60)

@@ -89,14 +89,14 @@ def monitor_training(
                         # Download if it's a multiple of auto_download_every_n
                         if download_all_checkpoints or (iter_num % auto_download_every_n == 0):
                             if download_checkpoint(cp):
-                                print(f"✓ Downloaded {cp}")
+                                print(f"Downloaded {cp}")
                     except:
                         pass
 
             # Always try to download best_model.pt
             if download_best:
                 if download_checkpoint("best_model.pt"):
-                    print(f"✓ Downloaded latest best_model.pt")
+                    print(f"Downloaded latest best_model.pt")
 
             # Wait before next check
             print(f"\nNext check in {check_interval/60:.1f} minutes...")

@@ -8,11 +8,11 @@ import os
 app = modal.App("chess-download")
 volume = modal.Volume.from_name("chess-weights", create_if_missing=False)
 
-@app.function(volumes={"/root/data": volume})
+@app.function(volumes={"/root/weights": volume})
 def list_checkpoints():
     """List all checkpoints in the volume"""
     import os
-    weights_dir = "/root/data/weights"
+    weights_dir = "/root/weights"
 
     if not os.path.exists(weights_dir):
         print("No weights directory found yet - training hasn't started")
@@ -33,11 +33,11 @@ def list_checkpoints():
 
     return checkpoint_files
 
-@app.function(volumes={"/root/data": volume})
+@app.function(volumes={"/root/weights": volume})
 def download_checkpoint(checkpoint_name: str, local_dir: str = "."):
     """Download a specific checkpoint"""
     import os
-    remote_path = f"/root/data/weights/{checkpoint_name}"
+    remote_path = f"/root/weights/{checkpoint_name}"
 
     if not os.path.exists(remote_path):
         print(f"Checkpoint {checkpoint_name} not found!")
@@ -82,8 +82,8 @@ def main(mode: str = "list", checkpoint: str = "best_model.pt"):
             f.write(data)
 
         size_mb = len(data) / (1024 * 1024)
-        print(f"✓ Downloaded {checkpoint} ({size_mb:.1f} MB)")
-        print(f"✓ Saved to: {local_path}")
+        print(f"[OK] Downloaded {checkpoint} ({size_mb:.1f} MB)")
+        print(f"[OK] Saved to: {local_path}")
 
     else:
         print(f"Unknown mode: {mode}")

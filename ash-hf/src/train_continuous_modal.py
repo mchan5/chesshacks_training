@@ -54,6 +54,7 @@ def continuous_train(
     print("Starting continuous training on Modal")
     print("=" * 60)
 
+    # Pass the volume object so training can commit periodically
     continuous_training(
         num_iterations=num_iterations,
         games_per_iteration=games_per_iteration,
@@ -61,10 +62,11 @@ def continuous_train(
         train_epochs_per_iteration=2,
         batch_size=128,  # Increased from 64 - A100 has more memory
         learning_rate=0.001,
-        checkpoint_every=10  # Save less frequently to speed up training
+        checkpoint_every=5,  # Save every 5 iterations (~15-30 minutes)
+        modal_volume=volume
     )
 
-    # Commit volume to persist all changes
+    # Final commit to persist all changes
     volume.commit()
 
     print("\n" + "=" * 60)

@@ -548,7 +548,7 @@ def main():
                 'val_loss': val_loss,
                 'val_accuracy': val_accuracy,
             }, best_model_path)
-            print(f"✓ Saved best model (val_loss: {val_loss:.4f})")
+            print(f"[OK] Saved best model (val_loss: {val_loss:.4f})")
 
         # Save checkpoint
         if (epoch + 1) % 2 == 0:

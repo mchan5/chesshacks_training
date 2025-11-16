@@ -22,10 +22,10 @@ from train import ChessNet, MCTS, encode_board, move_to_index, device
 
 # Paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if os.path.exists("/root/data"):  # Modal environment
-    WEIGHTS_DIR = "/root/data/weights"
-    DATA_DIR = "/root/data"
-    SELFPLAY_DIR = "/root/data/selfplay"
+if os.path.exists("/root/weights"):  # Modal environment (volume mounted at /root/weights)
+    WEIGHTS_DIR = "/root/weights"
+    DATA_DIR = "/root/weights"
+    SELFPLAY_DIR = "/root/weights/selfplay"
 else:  # Local environment
     WEIGHTS_DIR = os.path.join(SCRIPT_DIR, "../weights")
     DATA_DIR = os.path.join(SCRIPT_DIR, "../data")
@@ -77,7 +77,10 @@ def play_self_play_game(model, num_simulations=50, temperature=1.0, debug=False)
 
     game_history = []
     move_count = 0
-    max_moves = 200  # Prevent infinite games
+    max_moves = 150  # Prevent infinite games (reduced from 200)
+
+    # Track position repetition to detect stuck games
+    position_history = []
 
     while not board.is_game_over() and move_count < max_moves:
         move_start = time_module.time()
@@ -129,12 +132,26 @@ def play_self_play_game(model, num_simulations=50, temperature=1.0, debug=False)
         board.push(chosen_move)
         move_count += 1
 
+        # Track position for repetition detection
+        position_history.append(board.fen())
+
+        # Early termination if stuck in repetitive loop (same position 6+ times)
+        if position_history.count(board.fen()) >= 6:
+            if debug:
+                print(f"  Game terminated early: repetitive position detected")
+            break
+
     # Determine game outcome
     result = board.result()
+    hit_move_limit = (move_count >= max_moves)
+
     if result == "1-0":
         outcome = 1.0  # White wins
     elif result == "0-1":
         outcome = -1.0  # Black wins
+    elif hit_move_limit:
+        # Small penalty for hitting move limit (discourages endless games)
+        outcome = -0.1
     else:
         outcome = 0.0  # Draw
 
@@ -230,7 +247,8 @@ def continuous_training(
     train_epochs_per_iteration=3,
     batch_size=64,
     learning_rate=0.001,
-    checkpoint_every=5
+    checkpoint_every=5,
+    modal_volume=None
 ):
     """
     Main continuous training loop.
@@ -243,6 +261,7 @@ def continuous_training(
         batch_size: Training batch size
         learning_rate: Learning rate
         checkpoint_every: Save checkpoint every N iterations
+        modal_volume: Optional Modal volume object for periodic commits
     """
     print("=" * 60)
     print("CONTINUOUS SELF-PLAY TRAINING")
@@ -292,10 +311,10 @@ def continuous_training(
             print(f"Successfully loaded checkpoint, resuming from iteration {start_iteration}")
 
         except (RuntimeError, KeyError) as e:
-            print(f"\n⚠️  Checkpoint architecture mismatch (old model had different size)")
-            print(f"⚠️  This is expected if you changed network parameters")
-            print(f"⚠️  Starting fresh with new optimized architecture")
-            print(f"⚠️  Old checkpoint will be overwritten\n")
+            print(f"\n[WARNING] Checkpoint architecture mismatch (old model had different size)")
+            print(f"[WARNING] This is expected if you changed network parameters")
+            print(f"[WARNING] Starting fresh with new optimized architecture")
+            print(f"[WARNING] Old checkpoint will be overwritten\n")
             start_iteration = 0
     else:
         print("\nNo existing checkpoint found, starting from scratch")
@@ -358,7 +377,7 @@ def continuous_training(
                 'optimizer_state_dict': optimizer.state_dict(),
                 'train_loss': train_loss,
             }, checkpoint_path)
-            print(f"✓ Saved checkpoint: {checkpoint_path}")
+            print(f"[OK] Saved checkpoint: {checkpoint_path}")
 
         # Always update best model
         torch.save({
@@ -367,6 +386,11 @@ def continuous_training(
             'optimizer_state_dict': optimizer.state_dict(),
             'train_loss': train_loss,
         }, best_model_path)
+
+        # Commit Modal volume to persist changes (important for periodic checkpoints)
+        if modal_volume is not None:
+            modal_volume.commit()
+            print("[OK] Modal volume committed (changes persisted)")
 
         # Save game records
         games_file = os.path.join(SELFPLAY_DIR, f"games_iter_{iteration+1}.json")

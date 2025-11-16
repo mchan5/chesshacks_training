@@ -275,7 +275,7 @@ def main(mode: str = "train", checkpoint: str = ""):
 
                 with open(local_path, 'wb') as f:
                     f.write(content)
-                print(f"✓ Downloaded: {local_path}")
+                print(f"Downloaded: {local_path}")
             else:
                 print("Checkpoint not found!")
         else:
@@ -293,7 +293,7 @@ def main(mode: str = "train", checkpoint: str = ""):
                         f.write(content)
                     print(f"Downloaded: {local_path}")
 
-                print(f"\n✓ Successfully downloaded {len(weights)} weight files!")
+                print(f"\n  Successfully downloaded {len(weights)} weight files!")
             else:
                 print("No weights found to download.")
 

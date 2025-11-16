@@ -39,8 +39,8 @@ def load_model(checkpoint_path='../weights/best_model.pt'):
     model.eval()
 
     iteration = checkpoint.get('iteration', 'unknown')
-    print(f"✓ Loaded model from iteration {iteration}")
-    print(f"✓ Using device: {device}")
+    print(f"  Loaded model from iteration {iteration}")
+    print(f"  Using device: {device}")
 
     return model, device
 
@@ -123,7 +123,7 @@ def play_game(model, human_color='white', simulations=100):
                     if move in board.legal_moves:
                         board.push(move)
                         move_history.append(move)
-                        print(f"✓ You played: {move.uci()}")
+                        print(f"  You played: {move.uci()}")
                         break
                     else:
                         print("❌ Illegal move! Try again.")
@@ -144,7 +144,7 @@ def play_game(model, human_color='white', simulations=100):
                 move = get_model_move(board, model, simulations=simulations)
                 board.push(move)
                 move_history.append(move)
-                print(f"✓ AI played: {move.uci()}")
+                print(f"  AI played: {move.uci()}")
             except Exception as e:
                 print(f"❌ AI error: {e}")
                 print("AI resigns due to error.")
